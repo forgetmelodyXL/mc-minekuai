@@ -21,6 +21,13 @@
     "minecraft",
     "minekuai"
   ],
+  "koishi": {
+    "service": {
+      "required": [
+        "database"
+      ]
+    }
+  },
   "dependencies": {
     "mc-server-util": "^1.0.0"
   },
