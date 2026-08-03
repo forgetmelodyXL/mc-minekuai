@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-mc-minekuai",
   "description": "基于麦块(MineKuai)联机平台的 Minecraft 服务器状态查询与远程管理 Koishi 插件",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
