@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-mc-minekuai",
-  "description": "",
-  "version": "0.0.1",
+  "description": "基于麦块(MineKuai)联机平台的 Minecraft 服务器状态查询与远程管理 Koishi 插件",
+  "version": "1.0.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -9,13 +9,16 @@
     "dist"
   ],
   "license": "MIT",
-  "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
-    "plugin"
+    "plugin",
+    "minecraft",
+    "minekuai"
   ],
-  "devDependencies": {},
+  "dependencies": {
+    "mc-server-util": "^1.0.0"
+  },
   "peerDependencies": {
     "koishi": "^4.18.7"
   }
