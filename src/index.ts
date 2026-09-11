@@ -1,4 +1,4 @@
-import { Context, Schema } from 'koishi'
+import { Context, Schema, h } from 'koishi'
 
 let getMinecraftServerStatus: any
 import('mc-server-util').then(m => {
@@ -20,6 +20,12 @@ export interface Config {
   apiKey: string
   showIpInDetail: boolean
   servers: ServerConfig[]
+  emptyDetectEnabled: boolean
+  emptyDetectIntervalMinutes: number
+  emptyDetectThreshold: number
+  emptyDetectNotifyChannels: string[]
+  autoStartEnabled: boolean
+  autoStartIntervalMinutes: number
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -41,6 +47,18 @@ export const Config: Schema<Config> = Schema.intersect([
       minekuaiInstanceId: Schema.string().description('麦块实例ID(8位短UUID)'),
     })).description('服务器列表').role('table'),
   }).description('服务器配置'),
+
+  Schema.object({
+    emptyDetectEnabled: Schema.boolean().default(false).description('是否开启无人检测(定时检测在线人数，同一服务器连续Y次无人在线时@全体成员通报)'),
+    emptyDetectIntervalMinutes: Schema.number().default(60).min(1).description('无人检测间隔X(分钟)'),
+    emptyDetectThreshold: Schema.number().default(48).min(1).description('连续无人在线次数阈值Y(达到后@全体成员通报并清零重新计数)'),
+    emptyDetectNotifyChannels: Schema.array(Schema.string()).description('无人检测通报发送的群号/频道ID列表').role('table'),
+  }).description('无人检测'),
+
+  Schema.object({
+    autoStartEnabled: Schema.boolean().default(false).description('是否开启自动开服(定时检测，自动启动已关闭的服务器)'),
+    autoStartIntervalMinutes: Schema.number().default(10).min(1).description('自动开服检测间隔X(分钟)'),
+  }).description('自动开服'),
 ])
 
 export function apply(ctx: Context, config: Config) {
@@ -547,6 +565,98 @@ export function apply(ctx: Context, config: Config) {
         return `❌ 切换整合包失败: ${error.message}`
       }
     })
+
+  // ============ 定时任务：无人检测 ============
+
+  if (config.emptyDetectEnabled) {
+    const emptyDetectIntervalMinutes = Math.max(1, config.emptyDetectIntervalMinutes || 60)
+    const emptyDetectThreshold = Math.max(1, config.emptyDetectThreshold || 48)
+    // 各服务器连续无人在线计数
+    const emptyCounters: Record<string, number> = {}
+
+    async function sendEmptyDetectNotification(content: string) {
+      const channels = config.emptyDetectNotifyChannels || []
+      for (const channelId of channels) {
+        let sent = false
+        for (const bot of ctx.bots) {
+          try {
+            await bot.sendMessage(channelId, content, channelId)
+            sent = true
+            break
+          } catch {
+            // 此 bot 可能不在该群，尝试下一个
+          }
+        }
+        if (!sent) {
+          ctx.logger.warn(`无人检测通报发送到 ${channelId} 失败: 所有 bot 均无法发送`)
+        }
+      }
+    }
+
+    ctx.setInterval(async () => {
+      const servers = config.servers || []
+      if (servers.length === 0) return
+
+      const results = await Promise.all(servers.map(server => queryServerStatus(server)))
+      const reported: string[] = []
+
+      for (const result of results) {
+        const key = result.server.address
+        // 关闭(或查询失败)的服务器不参与统计
+        if (!result.success || !result.data || !result.data.online) {
+          delete emptyCounters[key]
+          continue
+        }
+        const onlinePlayers = result.data.players ? result.data.players.online : 0
+        if (onlinePlayers > 0) {
+          delete emptyCounters[key]
+          continue
+        }
+        emptyCounters[key] = (emptyCounters[key] || 0) + 1
+        if (emptyCounters[key] >= emptyDetectThreshold) {
+          // 达到阈值：通报并清零，等待下一计数循环
+          emptyCounters[key] = 0
+          const hours = ((emptyDetectIntervalMinutes * emptyDetectThreshold) / 60).toFixed(1)
+          reported.push(`${getServerName(result.server)} 已连续约 ${hours} 小时无人在线`)
+        }
+      }
+
+      if (reported.length > 0) {
+        let content = `${h('at', { type: 'all' })} 📢 无人检测通报\n`
+        for (const item of reported) {
+          content += `• ${item}\n`
+        }
+        content += `\n服务器仍在运行中，有空的伙伴们快上线玩吧！`
+        await sendEmptyDetectNotification(content)
+      }
+    }, emptyDetectIntervalMinutes * 60 * 1000)
+  }
+
+  // ============ 定时任务：自动开服 ============
+
+  if (config.autoStartEnabled) {
+    const autoStartIntervalMinutes = Math.max(1, config.autoStartIntervalMinutes || 10)
+
+    ctx.setInterval(async () => {
+      const servers = config.servers || []
+      for (const server of servers) {
+        const result = await queryServerStatus(server)
+        if (result.success && result.data && result.data.online) continue
+        // 仅处理配置了麦块实例ID的服务器
+        if (!server.minekuaiInstanceId) continue
+        try {
+          // 二次确认实例确实处于关闭状态，避免网络波动或启动中误判
+          const resp = await minekuaiRequest('GET', `/servers/${server.minekuaiInstanceId}`)
+          const attr = resp.attributes || resp
+          if (attr.current_state !== 'offline' || attr.is_suspended) continue
+          await minekuaiPowerRequest(server.minekuaiInstanceId, 'start', 3)
+          ctx.logger.info(`自动开服: 已向 ${getServerName(server)} 发送启动指令`)
+        } catch (error) {
+          ctx.logger.warn(`自动开服: 处理 ${getServerName(server)} 失败: ${error.message}`)
+        }
+      }
+    }, autoStartIntervalMinutes * 60 * 1000)
+  }
 
   // ============ Minecraft 状态查询(保留原功能) ============
 
