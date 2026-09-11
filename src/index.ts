@@ -636,12 +636,21 @@ export function apply(ctx: Context, config: Config) {
 
   if (config.autoStartEnabled) {
     const autoStartIntervalMinutes = Math.max(1, config.autoStartIntervalMinutes || 10)
+    // 连续3次开服后服务器仍处于关闭状态，则升级为强制重启
+    const forceRestartThreshold = 3
+    // 各服务器连续开服失败计数
+    const startAttempts: Record<string, number> = {}
 
     ctx.setInterval(async () => {
       const servers = config.servers || []
       for (const server of servers) {
+        const key = server.address
         const result = await queryServerStatus(server)
-        if (result.success && result.data && result.data.online) continue
+        if (result.success && result.data && result.data.online) {
+          // 服务器正常运行，重置计数
+          delete startAttempts[key]
+          continue
+        }
         // 仅处理配置了麦块实例ID的服务器
         if (!server.minekuaiInstanceId) continue
         try {
@@ -649,8 +658,28 @@ export function apply(ctx: Context, config: Config) {
           const resp = await minekuaiRequest('GET', `/servers/${server.minekuaiInstanceId}`)
           const attr = resp.attributes || resp
           if (attr.current_state !== 'offline' || attr.is_suspended) continue
-          await minekuaiPowerRequest(server.minekuaiInstanceId, 'start', 3)
-          ctx.logger.info(`自动开服: 已向 ${getServerName(server)} 发送启动指令`)
+
+          if ((startAttempts[key] || 0) >= forceRestartThreshold) {
+            // 已连续执行3次开服指令服务器仍处于关闭状态，执行强制重启(stop→kill→start)
+            ctx.logger.warn(`自动开服: ${getServerName(server)} 已连续${forceRestartThreshold}次开服仍处于关闭状态，执行强制重启`)
+            try {
+              await minekuaiPowerRequest(server.minekuaiInstanceId, 'stop', 3)
+            } catch (error) {
+              // 实例已处于关闭状态时 stop 可能被拒绝，忽略并继续执行 kill→start
+              ctx.logger.warn(`自动开服: ${getServerName(server)} 强制重启 stop 指令失败(继续执行): ${error.message}`)
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000))
+            await minekuaiPowerRequest(server.minekuaiInstanceId, 'kill', 3)
+            await new Promise(resolve => setTimeout(resolve, 3000))
+            await minekuaiPowerRequest(server.minekuaiInstanceId, 'start', 3)
+            ctx.logger.info(`自动开服: ${getServerName(server)} 强制重启指令已发送完成`)
+            // 强制重启后清零，等待下一轮观察结果
+            delete startAttempts[key]
+          } else {
+            startAttempts[key] = (startAttempts[key] || 0) + 1
+            await minekuaiPowerRequest(server.minekuaiInstanceId, 'start', 3)
+            ctx.logger.info(`自动开服: 已向 ${getServerName(server)} 发送启动指令 (连续第${startAttempts[key]}次)`)
+          }
         } catch (error) {
           ctx.logger.warn(`自动开服: 处理 ${getServerName(server)} 失败: ${error.message}`)
         }
