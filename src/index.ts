@@ -1,4 +1,4 @@
-import { Context, Schema, h } from 'koishi'
+import { Context, Schema } from 'koishi'
 
 let getMinecraftServerStatus: any
 import('mc-server-util').then(m => {
@@ -49,9 +49,9 @@ export const Config: Schema<Config> = Schema.intersect([
   }).description('服务器配置'),
 
   Schema.object({
-    emptyDetectEnabled: Schema.boolean().default(false).description('是否开启无人检测(定时检测在线人数，同一服务器连续Y次无人在线时@全体成员通报)'),
+    emptyDetectEnabled: Schema.boolean().default(false).description('是否开启无人检测(定时检测在线人数，同一服务器连续Y次无人在线时通报)'),
     emptyDetectIntervalMinutes: Schema.number().default(60).min(1).description('无人检测间隔X(分钟)'),
-    emptyDetectThreshold: Schema.number().default(48).min(1).description('连续无人在线次数阈值Y(达到后@全体成员通报并清零重新计数)'),
+    emptyDetectThreshold: Schema.number().default(48).min(1).description('连续无人在线次数阈值Y(达到后通报并清零重新计数)'),
     emptyDetectNotifyChannels: Schema.array(Schema.string()).description('无人检测通报发送的群号/频道ID列表').role('table'),
   }).description('无人检测'),
 
@@ -622,7 +622,7 @@ export function apply(ctx: Context, config: Config) {
       }
 
       if (reported.length > 0) {
-        let content = `${h('at', { type: 'all' })} 📢 无人检测通报\n`
+        let content = `📢 无人检测通报\n`
         for (const item of reported) {
           content += `• ${item}\n`
         }
